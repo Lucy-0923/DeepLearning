@@ -125,7 +125,7 @@ def train_val(model, train_loader, val_loader, device, epochs, optimizer, loss, 
                 val_loss += val_bat_loss.cpu().item()
         plt_val_loss.append(val_loss/ val_loader.__len__())
         if val_loss < min_val_loss:
-            torch.save(model, save_path)
+            torch.save(model.state_dict(), save_path)
             min_val_loss = val_loss
 
         print("[%03d/%03d] %2.2f sec(s) Trainloss: %.6f |Valloss: %.6f"% \
@@ -140,8 +140,10 @@ def train_val(model, train_loader, val_loader, device, epochs, optimizer, loss, 
 
 
 
-def evaluate(sava_path, test_loader,device,rel_path ):   #得出测试结果文件
-    model = torch.load(sava_path).to(device)
+def evaluate(sava_path, test_loader,device,rel_path, inDim ):   #得出测试结果文件
+    model = MyModel(inDim)
+    model.load_state_dict(torch.load(sava_path))
+    model = model.to(device)
     rel = []
     with torch.no_grad():
         for x in test_loader:
@@ -156,14 +158,19 @@ def evaluate(sava_path, test_loader,device,rel_path ):   #得出测试结果文�
     print("文件已经保存到"+rel_path)
 
 
+try:
+    _dir = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    _dir = os.path.abspath("")
+
 all_feature = False
 if all_feature:
     feature_dim = 93
 else:
     feature_dim = 6
 
-train_file = "covid.train.csv"
-test_file = "covid.test.csv"
+train_file = os.path.join(_dir, "covid.train.csv")
+test_file = os.path.join(_dir, "covid.test.csv")
 
 train_dataset = CovidDataset(train_file, "train",all_feature=all_feature, feature_dim=feature_dim)
 val_dataset = CovidDataset(train_file, "val",all_feature=all_feature, feature_dim=feature_dim)
@@ -213,4 +220,4 @@ optimizer = optim.SGD(model.parameters(), lr=config["lr"], momentum=config["mome
 
 train_val(model, train_loader, val_loader, device, config["epochs"], optimizer, loss, config["save_path"])
 
-evaluate(config["save_path"], test_loader, device, config["rel_path"])
+evaluate(config["save_path"], test_loader, device, config["rel_path"], feature_dim)

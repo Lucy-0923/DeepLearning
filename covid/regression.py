@@ -14,17 +14,69 @@ import torch
 import torch.nn as nn
 from torch import optim
 from torch.utils.data import DataLoader, Dataset
+from sklearn.feature_selection import SelectKBest, chi2 # 用于特征选择
 
 # matplotlib 中文显示配置
 plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei']
 plt.rcParams['axes.unicode_minus'] = False
+
+def get_feature_importance(feature_data, label_data, k =4,column = None):
+    """
+    此处省略 feature_data, label_data 的生成代码。
+    如果是 CSV 文件，可通过 read_csv() 函数获得特征和标签。
+    这个函数的目的是， 找到所有的特征种， 比较有用的k个特征， 并打印这些列的名字。
+    """
+    model = SelectKBest(chi2, k=k)      #定义一个选择k个最佳特征的函数
+    feature_data = np.array(feature_data, dtype=np.float64)
+    # label_data = np.array(label_data, dtype=np.float64)
+    X_new = model.fit_transform(feature_data, label_data)   #用这个函数选择k个最佳特征
+    #feature_data是特征数据，label_data是标签数据，该函数可以选择出k个特征
+    print('x_new', X_new)
+    scores = model.scores_                # scores即每一列与结果的相关性
+    # 按重要性排序，选出最重要的 k 个
+    indices = np.argsort(scores)[::-1]        #[::-1]表示反转一个列表或者矩阵。 逆置排序， 从大到小排序
+    # argsort这个函数， 可以矩阵排序后的下标。 比如 indices[0]表示的是，scores中最小值的下标。
+
+    if column:                            # 如果需要打印选中的列
+        k_best_features = [column[i+1] for i in indices[0:k].tolist()]         # 选中这些列 打印
+        print('k best features are: ',k_best_features)
+    return X_new, indices[0:k]                  # 返回选中列的特征和他们的下标。
+
+# def get_feature_importance_with_pca(feature_data, k=4, column=None):
+#     """
+#     使用PCA进行特征降维，并找出对前k个主成分影响最大的原始特征。
+#
+#     参数:
+#     feature_data (pd.DataFrame or np.ndarray): 特征数据。
+#     k (int): 选择的主成分数目，默认为4。
+#     column (list, optional): 特征名称列表。如果feature_data是DataFrame，则可以省略此参数。
+#
+#     返回:
+#     X_new (np.ndarray): 降维后的特征数据。
+#     selected_features (list of lists): 对每个主成分影响最大的原始特征及其载荷。
+#     """
+#     # 如果提供了列名或feature_data是DataFrame，获取列名
+#     if column is None and hasattr(feature_data, 'columns'):
+#         column = feature_data.columns.tolist()
+#     elif column is None:
+#         raise ValueError("Column names must be provided if feature_data is not a DataFrame.")
+#
+#     # 数据标准化
+#     scaler = StandardScaler()
+#     feature_data_scaled = scaler.fit_transform(feature_data)
+#
+#     # 应用PCA
+#     pca = PCA(n_components=k)
+#     X_new = pca.fit_transform(feature_data_scaled)
+#     return X_new
+
 
 
 # ── 数据集 ────────────────────────────────────────────────────────────────────
 # 继承 Dataset 必须实现三个方法：__init__ / __getitem__ / __len__
 class CovidDataset(Dataset):
 
-    def __init__(self, file_path, mode="train"):
+    def __init__(self, file_path, mode="train",all_feature = True, feature_dim = 6):
         """
         mode: "train" | "val" | "test"
         划分策略：每 5 条数据中，第 0 条给 val，其余 4 条给 train（逢 5 取 1）
@@ -36,6 +88,15 @@ class CovidDataset(Dataset):
         with open(file_path, "r") as f:
             ori_data = list(csv.reader(f))
             csv_data = np.array(ori_data[1:])[:, 1:].astype(float)
+            column = ori_data[0]
+        feature = np.array(ori_data[1:])[:, 1:-1] # 特征数据
+        label_data = np.array(ori_data[1:])[:, -1] # 标签数据
+        
+        if all_feature:
+            col = np.array([i for i in range(0,93)])
+        else:
+            _, col = get_feature_importance(feature, label_data, feature_dim, column)
+        col = col.tolist()
 
         # 按 mode 确定行索引，并提取标签列（最后一列）
         if self.mode == "train":
@@ -50,6 +111,7 @@ class CovidDataset(Dataset):
             indices = list(range(len(csv_data)))
             self.data = torch.tensor(csv_data[indices])  # 测试集CSV本身没有标签列，不需要去掉
 
+        self.data = self.data[:, col]
         # Z-score 标准化：(x - μ) / (σ + ε)，加 1e-8 防止除以 0
         self.data = (self.data - self.data.mean(dim=0, keepdim=True)) / \
                     (self.data.std(dim=0, keepdim=True) + 1e-8)
@@ -101,7 +163,7 @@ def train_val(model, train_loader, val_loader,device, epochs,optimizer,loss,save
         for batch_x, batch_y in train_loader:
             x, target = batch_x.to(device), batch_y.to(device)
             pred = model(x) #模型预测
-            train_batch_loss = loss(pred, target) #计算损失
+            train_batch_loss = loss(pred, target, model) #计算损失
             train_batch_loss.backward() #反向传播
             optimizer.step() #更新参数
             optimizer.zero_grad() #清空梯度 如果不清空就会梯度累加
@@ -115,7 +177,7 @@ def train_val(model, train_loader, val_loader,device, epochs,optimizer,loss,save
             for batch_x, batch_y in val_loader:
                 x, target = batch_x.to(device), batch_y.to(device)
                 pred = model(x)
-                val_batch_loss = loss(pred, target)
+                val_batch_loss = loss(pred, target,model)
                 val_loss += val_batch_loss.cpu().item()
 
         plt_val_loss.append(val_loss / len(val_loader)) #记录验证损失
@@ -160,13 +222,21 @@ try:
 except NameError:
     _dir = os.path.abspath("")
 
+all_feature = False
+if all_feature:
+    feature_dim = 93
+else:
+    feature_dim = 6
+
+
+
 train_file = os.path.join(_dir, "covid.train.csv")
 test_file  = os.path.join(_dir, "covid.test.csv")
 
 # ② 构建数据集：train/val 共用同一份训练 CSV，按索引划分；test 无标签
-train_dataset = CovidDataset(train_file, mode="train")
-val_dataset   = CovidDataset(train_file, mode="val")
-test_dataset  = CovidDataset(test_file,  mode="test")
+train_dataset = CovidDataset(train_file, mode="train",all_feature=all_feature,feature_dim=feature_dim)
+val_dataset   = CovidDataset(train_file, mode="val",all_feature=all_feature,feature_dim=feature_dim)
+test_dataset  = CovidDataset(test_file,  mode="test",all_feature=all_feature,feature_dim=feature_dim)
 
 # ③ 构建 DataLoader：训练集打乱顺序以增强随机性，验证集保持原序
 batchsize    = 16
@@ -186,9 +256,21 @@ config = {
     "rel_path" : "model_save/pred.csv"
 }
 
+def mseLoss_with_regularization(pred, target, model):
+    loss = nn.MSELoss(reduction='mean')
+    ''' Calculate loss '''
+    regularization_loss = 0                    # 正则项
+    for param in model.parameters():
+        # TODO: you may implement L1/L2 regularization here
+        # 使用L2正则项
+        # regularization_loss += torch.sum(abs(param))
+        regularization_loss += torch.sum(param ** 2)                  # 计算所有参数平方，让模型曲线更加平滑，更加不容易过拟合，缓解过拟合正则化让参数更加靠近0，正则化的解释很多
+    return loss(pred, target) + 0.00075 * regularization_loss             # 返回损失。 0.00075很小因为模型参数很多，所以要乘以0.00075，才能使正则化项对损失的影响更小
+
+
 # ⑥ 实例化模型、损失函数、优化器
 # inDim 自动从数据集特征维度读取，避免硬编码
-model     = CovidModel(inDim=train_dataset.data.shape[1]).to(device)
+model     = CovidModel(inDim=feature_dim).to(device)
 loss      = nn.MSELoss()              # 均方误差，回归任务的标准损失函数
 optimizer = optim.SGD(               # 随机梯度下降
     model.parameters(),
@@ -198,7 +280,7 @@ optimizer = optim.SGD(               # 随机梯度下降
 
 # ⑦ 开始训练；训练结束后自动绘制 loss 曲线并保存最优模型
 train_val(model, train_loader, val_loader, device,
-          config["epochs"], optimizer, loss, config["save_path"])
+          config["epochs"], optimizer, mseLoss_with_regularization, config["save_path"])
 
 #验证过程 
 evaluate(config["save_path"], test_loader, device, config["rel_path"], train_dataset.data.shape[1])#用最好模型来进行测试

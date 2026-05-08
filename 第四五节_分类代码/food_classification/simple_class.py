@@ -310,5 +310,4 @@ epochs = 15
 thres = 0.99
 
 
-
 train_val(model, train_loader, val_loader, no_label_loader, device, epochs, optimizer, loss, thres, save_path)
